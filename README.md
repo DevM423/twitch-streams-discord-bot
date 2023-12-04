@@ -1,6 +1,6 @@
 # Simple Twitch Streams Discord Bot
 
-This is a very simple Python Discord Bot that allows game communities to set up automatic notification messages in a discord server channel when someone starts streaming the set game on Twitch.
+This is a very simple Python Discord Bot that allows game communities to set up automatic notification messages in a Discord server channel when someone starts streaming the set game on Twitch.
 
 ## Setting up the bot
 
