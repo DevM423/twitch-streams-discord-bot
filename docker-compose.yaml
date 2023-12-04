@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  bot:
+    build: .
+    container_name: twitch-streams-discord-bot
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - data:/var/data
+
+volumes:
+  data:
