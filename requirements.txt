@@ -1,3 +1,2 @@
 discord.py
 twitchAPI
-google-api-python-client
