@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 from datetime import datetime, timedelta
 
 import discord
@@ -13,9 +15,10 @@ from twitchAPI.twitch import Twitch
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+lock = threading.Lock()
 
-YOUTUBE_STREAMS_ENABLED = True
-YOUTUBE_VIDEOS_ENABLED = True
+YOUTUBE_STREAMS_ENABLED = False
+YOUTUBE_VIDEOS_ENABLED = False
 
 discord_bot_token = os.getenv("DISCORD_BOT_TOKEN")
 twitch_client_id = os.getenv("TWITCH_CLIENT_ID")
@@ -42,9 +45,8 @@ static_game_name = os.getenv("STATIC_GAME_NAME")
 google_api_key = os.getenv("GOOGLE_API_KEY")
 youtube_search_game_name = os.getenv("YOUTUBE_SEARCH_GAME_NAME")
 
-if not all(
+if YOUTUBE_STREAMS_ENABLED and not all(
     [
-        YOUTUBE_STREAMS_ENABLED,
         static_game_name,
         google_api_key,
         youtube_search_game_name,
@@ -54,9 +56,8 @@ if not all(
     sys.exit(1)
 
 
-if not all(
+if YOUTUBE_VIDEOS_ENABLED and not all(
     [
-        YOUTUBE_VIDEOS_ENABLED,
         discord_videos_channel_id,
         static_game_name,
         google_api_key,
@@ -84,17 +85,26 @@ client = discord.Client(intents=intents)
 
 active_twitch_streamers = set()
 active_youtube_streamers = set()
+iognored_twitch_streamers = set()
+ignored_youtube_streamers = set()
 
+
+def read_ignored_streamers(platform: str):
+    with lock:
+        with open(f"/var/data/ignored_{platform}_streamers.txt", "r") as f:
+            return set(line.strip() for line in f)
 
 def read_last_streamers(platform: str):
-    with open(f"/var/data/last_{platform}_streamers.txt", "r") as f:
-        return set(line.strip() for line in f)
+    with lock:
+        with open(f"/var/data/last_{platform}_streamers.txt", "r") as f:
+            return set(line.strip() for line in f)
 
 
 def write_last_streamers(platform: str, streamers: set[str]):
-    with open(f"/var/data/last_{platform}_streamers.txt", "w") as f:
-        for stream in streamers:
-            f.write(stream + "\n")
+    with lock:
+        with open(f"/var/data/last_{platform}_streamers.txt", "w") as f:
+            for stream in streamers:
+                f.write(stream + "\n")
 
 
 async def send_stream_message(user: str, game: str, link: str):
@@ -119,14 +129,27 @@ async def send_video_message(user: str, game: str, link: str):
     )
 
 
+def make_request_with_retry(url, retries=3, delay=1):
+    """Helper function to retry requests with exponential backoff."""
+    for attempt in range(retries):
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Raises an HTTPError if the status is 4xx, 5xx
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            wait_time = delay * (2 ** attempt)  # Exponential backoff
+            time.sleep(wait_time)
+            continue
+    raise Exception("Request failed after maximum attempts")
+    
+
 def get_youtube_streams(page_token: str):
     url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&eventType=live&maxResults=100&order=date&q={youtube_search_game_name}&key={google_api_key}"
 
     if page_token != "":
         url = url + f"&nextPageToken={page_token}"
 
-    response = requests.get(url)
-    return json.loads(response.text)
+    return make_request_with_retry(url)
 
 
 def get_youtube_new_videos(page_token: str):
@@ -142,12 +165,12 @@ def get_youtube_new_videos(page_token: str):
     if page_token != "":
         url = url + f"&nextPageToken={page_token}"
 
-    response = requests.get(url)
-    return json.loads(response.text)
+    return make_request_with_retry(url)
 
 
 async def handle_twitch_streams(api):
     global active_twitch_streamers
+    global read_ignored_streamers
     previous_streamers = active_twitch_streamers
 
     # Get all active streams
@@ -155,7 +178,7 @@ async def handle_twitch_streams(api):
 
     # Extract streamers that were not already live
     active_streamers = set(stream.user_name for stream in streams)
-    new_streamers = active_streamers - previous_streamers
+    new_streamers = active_streamers - previous_streamers - ignored_streamers
     remaining_streamers = previous_streamers - (previous_streamers - active_streamers)
 
     for stream in (s for s in streams if s.user_name in new_streamers):
@@ -262,6 +285,10 @@ async def on_ready():
     active_twitch_streamers = read_last_streamers("twitch")
     global active_youtube_streamers
     active_youtube_streamers = read_last_streamers("youtube")
+    global ignored_twitch_streamers
+    ignored_twitch_streamers = read_ignored_streamers("twitch")
+    global ignored_youtube_streamers
+    ignored_youtube_streamers = read_ignored_streamers("youtube")
 
     api = await Twitch(twitch_client_id, twitch_oauth_token)
     if not check_streams.is_running():

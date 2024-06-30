@@ -2,7 +2,7 @@ version: "3.8"
 services:
   bot:
     build: .
-    container_name: twitch-streams-discord-bot
+    container_name: game-media-discord-bot
     env_file: .env
     restart: unless-stopped
     volumes:
